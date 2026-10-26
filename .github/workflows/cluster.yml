@@ -1,0 +1,59 @@
+name: K114 Distributed 10-Node Grid
+
+on:
+  workflow_dispatch:
+    inputs:
+      time_limit:
+        description: '各ノードの実行時間（秒）'
+        required: true
+        default: '600'
+        type: string
+
+jobs:
+  sieve-grid:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 10台の独立したクラウドノードを完全並列展開
+        worker_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    steps:
+      - name: リポジトリを仮想マシンにクローン
+        uses: actions/checkout@v4
+
+      - name: Python 3.12 環境のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 高速数論ライブラリ (GMP / Numba / NumPy) の導入
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy gmpy2 numba
+
+      - name: Worker ${{ matrix.worker_id }} 分散探索の実行
+        run: |
+          # 各ノードに割り当てられた 2 vCPU を Numba に全開で認識させる
+          export NUMBA_NUM_THREADS=2
+          python k114_worker.py \
+            --worker_id ${{ matrix.worker_id }} \
+            --total_workers 10 \
+            --time_limit ${{ inputs.time_limit }}
+
+      - name: 発見された完全解・ログの退避
+        if: always()
+        run: |
+          mkdir -p output_logs
+          # 解が発見された場合の出力ファイル、または通常ログを収集
+          cp -f K114_WORKER_*.txt output_logs/ 2>/dev/null || true
+          echo "Worker ${{ matrix.worker_id }} finished at $(date)" > output_logs/worker_${{ matrix.worker_id }}_status.txt
+
+      - name: 実行結果を Artifact としてアップロード
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: result-worker-${{ matrix.worker_id }}
+          path: output_logs/
+          retention-days: 7
